@@ -4,15 +4,25 @@ import { Button } from './ui/Button';
 import { analyzeScreenRecording } from '../services/geminiService';
 import { Input } from './ui/Input';
 
+interface DebugResult {
+    severity: 'CRITICAL' | 'WARNING' | 'INFO';
+    error_type: string;
+    explanation: string;
+    file_name: string;
+    fix_code: string;
+    human_readable_fix: string;
+}
+
 const DebugConsole: React.FC = () => {
   const [mediaFile, setMediaFile] = useState<File | Blob | null>(null);
   const [description, setDescription] = useState('');
-  const [fix, setFix] = useState<string>('');
+  const [result, setResult] = useState<DebugResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setMediaFile(e.target.files[0]);
+      setResult(null);
     }
   };
 
@@ -23,13 +33,11 @@ const DebugConsole: React.FC = () => {
             audio: false 
         });
         
-        // Create a video element to play the stream
         const video = document.createElement('video');
         video.srcObject = stream;
         video.muted = true;
         await video.play();
 
-        // Create canvas and draw the frame
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -41,9 +49,9 @@ const DebugConsole: React.FC = () => {
                 if (blob) {
                     const file = new File([blob], "screenshot.png", { type: 'image/png' });
                     setMediaFile(file);
+                    setResult(null);
                 }
                 
-                // Cleanup
                 stream.getTracks().forEach(t => t.stop());
                 video.remove();
             }, 'image/png');
@@ -57,125 +65,182 @@ const DebugConsole: React.FC = () => {
   const handleDebug = async () => {
     if (!mediaFile) return;
     setIsAnalyzing(true);
+    setResult(null);
     try {
-        const result = await analyzeScreenRecording(mediaFile, description || "Identify the bug in this image.");
-        setFix(result || 'No solution found.');
+        const jsonStr = await analyzeScreenRecording(mediaFile, description || "Identify the bug in this image.");
+        const parsed: DebugResult = JSON.parse(jsonStr);
+        setResult(parsed);
     } catch (err) {
-        setFix('Error analyzing image. Please ensure format is valid.');
         console.error(err);
+        alert("Diagnostics Failed. Please try a clearer image.");
     } finally {
         setIsAnalyzing(false);
     }
   };
 
-  return (
-    <div className="bg-slate-900/80 rounded-xl border border-slate-800 p-6">
-      <div className="mb-6">
-        <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-            <svg className="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            Multimodal Debugger
-        </h3>
-        <p className="text-sm text-slate-400 mb-4">
-            Stuck? <span className="text-cyan-400 font-semibold">Gemini 3 Pro</span> can see what you see. Upload a screenshot of your code, terminal, or UI glitch.
-        </p>
+  const copyCode = () => {
+      if(result?.fix_code) {
+          navigator.clipboard.writeText(result.fix_code);
+          alert("Code copied to clipboard!");
+      }
+  };
 
-        <div className="bg-slate-950/50 p-4 rounded-lg border border-slate-700/50 text-xs text-slate-400 space-y-2 font-mono">
-            <p className="font-bold text-slate-300 uppercase tracking-wider mb-2">Instructions:</p>
-            <ol className="list-decimal pl-4 space-y-1">
-                <li>Capture a screenshot of the error log, terminal output, or broken UI.</li>
-                <li>Upload the image using the buttons below.</li>
-                <li>(Optional) Add a text description of what you expected to happen.</li>
-                <li>Click <strong>Run Diagnostics</strong> to let Gemini analyze the visual stack trace against the Hackathon RAG context.</li>
-            </ol>
-        </div>
+  return (
+    <div className="bg-slate-900/90 rounded-xl border border-slate-800 p-6 h-full flex flex-col relative overflow-hidden shadow-2xl">
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none"></div>
+
+      <div className="mb-6 z-10">
+        <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-3">
+            <div className="p-2 bg-yellow-900/30 rounded border border-yellow-500/50">
+                <svg className="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+            </div>
+            <span>VISUAL STACK TRACE</span>
+        </h3>
+        <p className="text-sm text-slate-400">
+            Upload a screenshot of your <span className="text-cyan-400 font-mono">Terminal</span>, <span className="text-pink-400 font-mono">IDE</span>, or <span className="text-yellow-400 font-mono">Browser Console</span>.
+        </p>
       </div>
 
-      {!fix ? (
-          <div className="flex flex-col gap-4">
-             <Input 
-                placeholder="Describe the issue (e.g. 'Build failed on step 3')..." 
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="bg-slate-950/50"
-             />
-
-            <div className={`border-2 border-dashed rounded-lg p-6 text-center transition-all ${mediaFile ? 'border-yellow-500 bg-yellow-900/10' : 'border-slate-700 bg-slate-950 hover:border-slate-500'}`}>
-                {/* Upload or Record UI */}
-                {!mediaFile && (
-                    <div className="w-full flex flex-col items-center gap-4">
-                        <div className="flex flex-wrap w-full gap-4 justify-center">
-                            
-                            <Button onClick={takeScreenshot} variant="secondary" className="flex-1 min-w-[140px]">
-                                <svg className="w-4 h-4 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                Take Screenshot
-                            </Button>
-
-                            <div className="flex-1 min-w-[140px] relative">
-                                <input 
-                                    type="file" 
-                                    accept="image/*" 
-                                    onChange={handleFileChange} 
-                                    className="hidden" 
-                                    id="debug-upload" 
-                                />
-                                <label htmlFor="debug-upload" className="block w-full h-full">
-                                    <div className="h-full px-4 py-3 rounded-lg font-bold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 relative overflow-hidden group bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-400/50 cursor-pointer">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                                        Upload Image
-                                        <div className="absolute inset-0 rounded-lg ring-1 ring-white/10 group-hover:ring-white/30 pointer-events-none" />
-                                    </div>
+      <div className="flex-1 overflow-y-auto custom-scrollbar z-10 space-y-6">
+          {!result && !isAnalyzing ? (
+              <div className="flex flex-col gap-6 animate-fade-in">
+                 
+                 {/* Drag & Drop Area */}
+                 <div className={`border-2 border-dashed rounded-xl p-10 text-center transition-all duration-300 relative group ${mediaFile ? 'border-yellow-500 bg-yellow-900/5' : 'border-slate-700 bg-slate-900/50 hover:border-cyan-500 hover:bg-slate-800'}`}>
+                    {!mediaFile ? (
+                        <div className="flex flex-col items-center gap-4">
+                            <div className="flex gap-4 mb-2">
+                                <div className="w-12 h-16 bg-slate-800 rounded border border-slate-600 flex items-center justify-center text-[8px] font-mono text-slate-400">LOGS</div>
+                                <div className="w-16 h-12 bg-slate-800 rounded border border-slate-600 flex items-center justify-center text-[8px] font-mono text-slate-400 mt-4">UI</div>
+                                <div className="w-12 h-16 bg-slate-800 rounded border border-slate-600 flex items-center justify-center text-[8px] font-mono text-slate-400">CODE</div>
+                            </div>
+                            <p className="text-sm text-slate-300 font-bold">Drop Diagnostic Evidence Here</p>
+                            <div className="flex gap-2 mt-2">
+                                <label className="cursor-pointer px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded shadow-lg transition-all">
+                                    Upload Screenshot
+                                    <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
                                 </label>
+                                <button onClick={takeScreenshot} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded shadow-lg transition-all">
+                                    Capture Screen
+                                </button>
                             </div>
                         </div>
-                        <p className="text-[10px] text-slate-500 font-mono">SUPPORTS PNG, JPG, WEBP</p>
-                    </div>
-                )}
+                    ) : (
+                        <div className="flex flex-col items-center animate-fade-in">
+                            <img 
+                                src={URL.createObjectURL(mediaFile)} 
+                                className="h-40 object-contain rounded border border-yellow-500/50 shadow-[0_0_20px_rgba(234,179,8,0.2)] mb-4" 
+                            />
+                            <div className="flex items-center gap-2">
+                                <span className="text-yellow-400 font-mono text-xs">{mediaFile instanceof File ? mediaFile.name : "Capture.png"}</span>
+                                <button onClick={() => setMediaFile(null)} className="text-slate-500 hover:text-white px-2">×</button>
+                            </div>
+                        </div>
+                    )}
+                 </div>
 
-                {mediaFile && (
-                     <div className="flex flex-col items-center">
-                        <img 
-                            src={URL.createObjectURL(mediaFile)} 
-                            alt="Screenshot Preview" 
-                            className="h-48 object-contain mb-2 border border-slate-600 rounded shadow-lg" 
-                            onLoad={(e) => URL.revokeObjectURL(e.currentTarget.src)}
-                        />
-                         <span className="text-white font-medium break-all">
-                             {mediaFile instanceof File ? mediaFile.name : "Screenshot.png"}
-                         </span>
-                         <button 
-                            onClick={() => setMediaFile(null)}
-                            className="text-xs text-red-400 hover:text-red-300 mt-2 underline"
-                         >
-                             Remove & Retake
-                         </button>
-                    </div>
-                )}
-            </div>
-            
-            <Button 
-                onClick={handleDebug} 
-                disabled={!mediaFile || isAnalyzing}
-                isLoading={isAnalyzing}
-                className="w-full bg-yellow-600 hover:bg-yellow-500 text-white border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)]"
-            >
-                {isAnalyzing ? 'Analyzing Visual Data...' : 'Run Diagnostics'}
-            </Button>
-          </div>
-      ) : (
-          <div className="animate-fade-in">
-              <div className="bg-slate-950 rounded-lg p-6 border border-slate-700 max-h-[400px] overflow-y-auto custom-scrollbar">
-                  <div className="flex justify-between items-start mb-4">
-                      <h4 className="font-mono text-yellow-500 text-sm uppercase">Debug Solution</h4>
-                      <button onClick={() => { setFix(''); setMediaFile(null); setDescription(''); }} className="text-xs text-slate-500 hover:text-white underline">New Scan</button>
-                  </div>
-                  <pre className="whitespace-pre-wrap font-sans text-slate-300 leading-relaxed text-sm">
-                      {fix}
-                  </pre>
+                 {/* Context Input */}
+                 <div>
+                     <label className="text-xs font-mono text-slate-500 uppercase font-bold mb-2 block">Optional Context</label>
+                     <Input 
+                        placeholder="e.g. 'I'm getting a 403 error when deploying to Firebase...'" 
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        className="bg-slate-950 border-slate-800 focus:border-yellow-500"
+                     />
+                 </div>
+
+                 <Button 
+                    onClick={handleDebug} 
+                    disabled={!mediaFile}
+                    className="w-full bg-yellow-600 hover:bg-yellow-500 text-white border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] h-12 text-sm uppercase tracking-widest"
+                >
+                    Run Visual Diagnostics
+                </Button>
               </div>
-          </div>
-      )}
+          ) : isAnalyzing ? (
+              <div className="flex flex-col items-center justify-center h-full gap-6 animate-fade-in">
+                  <div className="relative w-24 h-24">
+                      <div className="absolute inset-0 border-4 border-slate-800 rounded-full"></div>
+                      <div className="absolute inset-0 border-4 border-yellow-500 rounded-full border-t-transparent animate-spin"></div>
+                      <div className="absolute inset-4 bg-slate-800 rounded-full flex items-center justify-center">
+                          <svg className="w-8 h-8 text-yellow-500 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                      </div>
+                  </div>
+                  <div className="text-center">
+                      <h4 className="text-white font-bold text-lg">Analyzing Visual Data</h4>
+                      <p className="text-slate-400 text-xs font-mono mt-1">GEMINI 3 PRO IS PARSING PIXELS...</p>
+                  </div>
+                  <div className="w-64 h-1 bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full bg-yellow-500 animate-[progress_2s_ease-in-out_infinite] w-full origin-left transform scale-x-0"></div>
+                  </div>
+              </div>
+          ) : result && (
+              <div className="animate-fade-in space-y-6 pb-6">
+                  {/* Result Header */}
+                  <div className={`p-4 rounded-lg border flex items-center justify-between ${result.severity === 'CRITICAL' ? 'bg-red-900/20 border-red-500/50' : 'bg-yellow-900/20 border-yellow-500/50'}`}>
+                      <div>
+                          <div className="flex items-center gap-2 mb-1">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${result.severity === 'CRITICAL' ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'}`}>
+                                  {result.severity}
+                              </span>
+                              <span className="text-xs font-mono text-slate-300 uppercase">{result.error_type}</span>
+                          </div>
+                          <h2 className="text-white font-bold text-lg">Diagnostic Report</h2>
+                      </div>
+                      <button onClick={() => { setMediaFile(null); setResult(null); }} className="text-xs text-slate-500 hover:text-white underline">
+                          New Scan
+                      </button>
+                  </div>
+
+                  {/* Root Cause */}
+                  <div className="space-y-2">
+                      <h4 className="text-xs font-mono text-slate-500 uppercase font-bold">Root Cause Analysis</h4>
+                      <p className="text-sm text-slate-300 leading-relaxed bg-slate-950 p-3 rounded border border-slate-800">
+                          {result.explanation}
+                      </p>
+                  </div>
+
+                  {/* Fix Code Block */}
+                  <div className="space-y-2">
+                      <div className="flex justify-between items-end">
+                         <h4 className="text-xs font-mono text-cyan-500 uppercase font-bold">
+                             Recommended Patch <span className="text-slate-500 ml-2">// {result.file_name}</span>
+                         </h4>
+                         <button onClick={copyCode} className="text-[10px] text-cyan-400 hover:text-white flex items-center gap-1">
+                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                             COPY
+                         </button>
+                      </div>
+                      
+                      <div className="bg-[#0d1117] rounded-lg border border-slate-700 overflow-hidden font-mono text-xs relative group">
+                          <div className="flex gap-1.5 p-3 border-b border-slate-800 bg-[#161b22]">
+                              <div className="w-2.5 h-2.5 rounded-full bg-red-500/20"></div>
+                              <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/20"></div>
+                              <div className="w-2.5 h-2.5 rounded-full bg-green-500/20"></div>
+                          </div>
+                          <div className="p-4 overflow-x-auto text-green-400 leading-5">
+                              <pre>{result.fix_code}</pre>
+                          </div>
+                      </div>
+                  </div>
+
+                  {/* Human Readable */}
+                  <div className="flex items-start gap-3 bg-slate-800/50 p-3 rounded border border-slate-700">
+                      <div className="p-1 bg-green-900/30 rounded text-green-400 mt-0.5">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      </div>
+                      <div>
+                          <h5 className="text-xs font-bold text-white mb-1">Action Plan</h5>
+                          <p className="text-xs text-slate-400">{result.human_readable_fix}</p>
+                      </div>
+                  </div>
+              </div>
+          )}
+      </div>
     </div>
   );
 };

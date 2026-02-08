@@ -2,6 +2,19 @@
 import { GoogleGenAI, GenerateContentResponse, Chat, Modality } from "@google/genai";
 import { HackathonConfig } from "../types";
 
+// Robust API Key retrieval for Vite/Web environments
+const getApiKey = (): string => {
+    // @ts-ignore
+    const viteEnv = import.meta.env?.VITE_GEMINI_API_KEY;
+    if (viteEnv) return viteEnv;
+    
+    // Fallback to process.env if polyfilled
+    if (process.env.API_KEY) return process.env.API_KEY;
+    
+    console.error("API Key not found. Please set VITE_GEMINI_API_KEY in .env");
+    return "";
+};
+
 // Helper to convert File to Base64
 export const fileToGenerativePart = async (file: File) => {
   const base64EncodedDataPromise = new Promise<string>((resolve) => {
@@ -23,7 +36,7 @@ export const fileToGenerativePart = async (file: File) => {
 };
 
 // Helper to read text files for RAG context
-const readTextFile = (file: File): Promise<string> => {
+export const readTextFile = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -63,7 +76,7 @@ const cleanJsonOutput = (text: string): string => {
 };
 
 export const createHackathonChat = async (config: HackathonConfig): Promise<Chat> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const linksContext = config.youtubeLinks.length > 0 
     ? `\n\nEXTERNAL REFERENCE LINKS (The user may ask about these):\n${config.youtubeLinks.map(l => `- ${l}`).join('\n')}`
     : '';
@@ -124,21 +137,6 @@ export const createHackathonChat = async (config: HackathonConfig): Promise<Chat
       } catch (e) { console.error("Failed to attach avatar", e); }
   }
 
-  // 4. Add Briefing Video (Audio/Visual Context)
-  const briefingVideo = config.files.find(f => f.name.includes('briefing') || f.type.startsWith('video/'));
-  if (briefingVideo) {
-      try {
-        // Only attach if reasonable size for a demo (skip huge files to prevent browser crash)
-        if (briefingVideo.size < 50 * 1024 * 1024) { 
-            const videoPart = await fileToGenerativePart(briefingVideo);
-            initialUserParts.push(videoPart);
-            initialUserParts.push({ text: " [SYSTEM] Attached above is YOUR Keynote/Briefing. LISTEN to your own voice, tone, and gestures in this video. MIMIC this personality exactly in your text responses." });
-        }
-      } catch (e) { console.error("Failed to attach briefing video", e); }
-  } else {
-      initialUserParts.push({ text: " [SYSTEM] No video briefing found. Rely strictly on the text vision statement." });
-  }
-
   const history = [
       {
           role: 'user',
@@ -156,42 +154,11 @@ export const createHackathonChat = async (config: HackathonConfig): Promise<Chat
   });
 };
 
-export const createElevenLabsVoice = async (apiKey: string, name: string, audioBlob: Blob) => {
-    const formData = new FormData();
-    formData.append('name', `${name} (Hackathon Copilot Clone)`);
-    // Ensure we send a file with a name and correct type
-    formData.append('files', new File([audioBlob], 'sample.webm', { type: 'audio/webm' }));
-    formData.append('description', 'Cloned via Hackathon Copilot');
-
-    try {
-        const response = await fetch('https://api.elevenlabs.io/v1/voices/add', {
-            method: 'POST',
-            headers: {
-                'xi-api-key': apiKey,
-                // Note: Do NOT set Content-Type header when sending FormData, fetch sets it automatically with boundary
-            },
-            body: formData
-        });
-
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail?.message || "Failed to create voice clone");
-        }
-
-        const data = await response.json();
-        return data.voice_id; // Returns the new Voice ID
-    } catch (e) {
-        console.error("ElevenLabs Creation Error", e);
-        throw e;
-    }
-};
-
 export const generateFounderSpeech = async (
     text: string, 
-    voiceName: string = 'Fenrir',
-    elevenLabs?: { apiKey: string, voiceId: string }
+    voiceName: string = 'Fenrir'
 ) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   // Clean text for better speech
   const cleanText = text
     .replace(/\*\*/g, '')
@@ -199,49 +166,10 @@ export const generateFounderSpeech = async (
     .replace(/\[ESCALATE\]/g, '')
     .replace(/\(Spoken Script Mode Active\)/gi, '')
     .replace(/```[\s\S]*?```/g, 'Checking the code snippet...') // Skip reading code blocks out loud
+    .replace(/>\s*\[.*?\]/g, '') // Remove visual cues in blockquotes
     .trim();
   
-  // 1. Check for ElevenLabs override
-  if (elevenLabs && elevenLabs.apiKey && elevenLabs.voiceId) {
-      try {
-          const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabs.voiceId}`, {
-              method: 'POST',
-              headers: {
-                  'xi-api-key': elevenLabs.apiKey,
-                  'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                  text: cleanText,
-                  model_id: "eleven_monolingual_v1",
-                  voice_settings: {
-                      stability: 0.5,
-                      similarity_boost: 0.75
-                  }
-              })
-          });
-
-          if (!response.ok) {
-              const err = await response.text();
-              console.error("ElevenLabs Error", err);
-              throw new Error("ElevenLabs API Error");
-          }
-          
-          const arrayBuffer = await response.arrayBuffer();
-          // Convert ArrayBuffer to Base64
-          let binary = '';
-          const bytes = new Uint8Array(arrayBuffer);
-          const len = bytes.byteLength;
-          for (let i = 0; i < len; i++) {
-              binary += String.fromCharCode(bytes[i]);
-          }
-          return btoa(binary);
-      } catch (e) {
-          console.warn("ElevenLabs failed, falling back to Gemini TTS", e);
-          // Fallback proceeds to Gemini code below
-      }
-  }
-
-  // 2. Default: Gemini TTS
+  // Gemini TTS
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
     contents: [{ parts: [{ text: cleanText }] }],
@@ -258,85 +186,8 @@ export const generateFounderSpeech = async (
   return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 };
 
-export const validateAudioForCloning = async (audioBlob: Blob): Promise<{score: number, issues: string[], suitable: boolean}> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    try {
-        const audioPart = await blobToGenerativePart(audioBlob, 'audio/webm');
-        const prompt = `
-        You are an Audio Engineer specializing in Voice Cloning datasets.
-        
-        TASK: Analyze the audio quality of this file for ElevenLabs voice cloning suitability.
-        CHECK FOR:
-        1. Background Noise (Must be low)
-        2. Clarity/Articulation (Must be high)
-        3. Volume/Clipping (Must be balanced)
-        4. Duration (Ideally >30s)
-
-        OUTPUT: STRICT JSON ONLY. No Markdown.
-        {
-            "score": number (0-100),
-            "issues": ["string", "string"], (List specific problems e.g. "Too much echo", "Background chatter detected")
-            "suitable": boolean (true if score > 70)
-        }
-        `;
-
-        // Switch to Flash 3 Preview for robust multimodal analysis and JSON support
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: { parts: [audioPart, { text: prompt }] },
-            config: {
-                responseMimeType: "application/json"
-            }
-        });
-
-        const json = cleanJsonOutput(response.text || "{}");
-        return JSON.parse(json);
-    } catch (e) {
-        console.error("Audio validation error", e);
-        return { score: 0, issues: ["Analysis Failed"], suitable: false };
-    }
-};
-
-export const analyzeVoiceMatch = async (audioFile: File | Blob): Promise<string> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    let part;
-    if (audioFile instanceof File) {
-        part = await fileToGenerativePart(audioFile);
-    } else {
-        part = await blobToGenerativePart(audioFile, 'video/webm'); // Assuming input is from recorder
-    }
-
-    const prompt = `
-      You are an Audio Engineer.
-      Task: Listen to the speaker in this audio. Analyze their gender, pitch (High, Medium, Deep), and tone (Energetic, Calm, Authoritative).
-      
-      Match them to the CLOSEST Prebuilt Voice Profile from this list:
-      1. 'Puck' (Male, Deep, Neutral)
-      2. 'Charon' (Male, Deep, Authoritative)
-      3. 'Kore' (Female, Calm, Soothing)
-      4. 'Fenrir' (Male, Energetic, Higher Pitch)
-      5. 'Zephyr' (Female, Energetic, Professional)
-
-      OUTPUT ONLY THE NAME OF THE MATCHING VOICE (e.g. "Puck"). Do not add markdown.
-    `;
-
-    // Switch to Flash 3 Preview for robust multimodal analysis
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: {
-            parts: [part, { text: prompt }]
-        }
-    });
-
-    const match = response.text?.trim() || 'Fenrir';
-    // Sanitize
-    const validVoices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'];
-    const cleanMatch = validVoices.find(v => match.includes(v)) || 'Fenrir';
-    return cleanMatch;
-};
-
 export const generateFounderVideo = async (text: string, avatarFile: File) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const avatarPart = await fileToGenerativePart(avatarFile);
   
   const prompt = `A cinematic, realistic video of this person talking to the camera. 
@@ -367,7 +218,7 @@ export const generateFounderVideo = async (text: string, avatarFile: File) => {
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
   if (!downloadLink) throw new Error("Video generation failed to return a URI");
 
-  const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+  const response = await fetch(`${downloadLink}&key=${getApiKey()}`);
   if (!response.ok) throw new Error("Failed to download generated video");
   
   const arrayBuffer = await response.arrayBuffer();
@@ -376,7 +227,7 @@ export const generateFounderVideo = async (text: string, avatarFile: File) => {
 };
 
 export const checkApiHealth = async (): Promise<boolean> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -390,7 +241,7 @@ export const checkApiHealth = async (): Promise<boolean> => {
 };
 
 export const analyzeScreenRecording = async (mediaFile: File | Blob, issueDescription: string) => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     let mediaPart;
     
     // Determine mime type if possible
@@ -405,54 +256,113 @@ export const analyzeScreenRecording = async (mediaFile: File | Blob, issueDescri
     }
     
     const prompt = `
-      IDENTITY: You are a Senior Engineer acting as a Co-Founder.
+      IDENTITY: You are a Senior Engineer acting as a Co-Founder using Gemini 3 Vision.
       USER ISSUE: "${issueDescription}"
-      TASK: 
-      1. Analyze the screen recording or screenshot provided.
-      2. **IDENTIFY THE ERROR**: Look for red text, error logs, or UI bugs.
-      3. **IF THE INPUT IS UNCLEAR**: Explicitly ask the user: "I can't read the error message..."
-      4. **IF THE ERROR IS VISIBLE**: Provide the specific code fix immediately.
+      
+      VISUAL ANALYSIS TASK:
+      1. ANALYZE the visual stack trace in the image/video frame-by-frame. 
+      2. EXTRACT the exact text of error logs, exception messages, terminal output, or red squiggly lines. 
+      3. IGNORE generic advice. LOOK at the screen content. READ the pixels.
+      4. If it's code, identify the syntax error.
+      
+      OUTPUT: JSON format with the following schema:
+      {
+        "severity": "CRITICAL" | "WARNING" | "INFO",
+        "error_type": "string (e.g. Runtime Error, UI Overflow, Null Pointer)",
+        "explanation": "string (The technical root cause based on the screenshot text)",
+        "file_name": "string (Suggest which file to edit based on stack trace)",
+        "fix_code": "string (The corrected code snippet)",
+        "human_readable_fix": "string (Short, clear instructions. e.g. 'I see a Null check error on line 42...')"
+      }
     `;
 
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
       contents: {
         parts: [mediaPart, { text: prompt }]
+      },
+      config: {
+          responseMimeType: 'application/json'
       }
     });
 
-    return response.text;
+    return cleanJsonOutput(response.text || "{}");
 };
 
 export const analyzePitchVideo = async (input: File | string, context: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const parts: any[] = [];
   let tools: any[] | undefined = undefined;
+  let visualAnalysisInstructions = "";
 
   if (input instanceof File) {
-      // Handle Video File
+      // Handle Video File Directly
       const videoPart = await fileToGenerativePart(input);
       parts.push(videoPart);
+      
+      visualAnalysisInstructions = `
+      MEDIA TYPE: Raw Video File (Direct Vision Analysis).
+      
+      VISUAL ANALYSIS PROTOCOL:
+      1. **Visual Storytelling**: Analyze the video frames. Is there a clear narrative arc visually?
+      2. **Slide Content**: If slides are present, read the text. Are they too text-heavy? Are they readable?
+      3. **Code/Demo Visibility**: If code or a software demo is shown, is it legible? Is the font size appropriate?
+      4. **Presenter Presence**: If a person is visible, analyze facial expressions and body language.
+      
+      Integrate these specific visual observations into the 'presentation' score and 'critique'.
+      `;
   } else {
-      // Handle URL string
-      let cleanUrl = input.trim();
+      // Handle URL string with strict sanitization
+      let rawUrl = input.trim();
+      let cleanUrl = rawUrl;
+      let videoId = '';
+
+      try {
+          // Robust YouTube ID Extraction
+          const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+          const match = rawUrl.match(ytRegex);
+          
+          if (match && match[1]) {
+              videoId = match[1];
+              cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          } else {
+              const urlToParse = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
+              const urlObj = new URL(urlToParse);
+              cleanUrl = urlObj.href;
+          }
+      } catch (e) {
+          cleanUrl = rawUrl;
+      }
+
       let extraInstructions = "";
 
-      // YouTube Specific Logic
-      if (cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be')) {
+      if (videoId) {
           extraInstructions = `
-          NOTE: This is a YouTube link. 
-          1. Use the 'googleSearch' tool to search for the specific VIDEO ID found in the URL.
-          2. Try to find the transcript, title, and description from the search results.
-          3. If the direct video content is inaccessible, base your analysis on the text metadata (Title, Description, Reviews/Transcript) found via search.
+          MEDIA TARGET: YouTube Video (ID: ${videoId})
+          
+          OPERATIONAL PROTOCOL (SEARCH-GROUNDED ANALYSIS):
+          1.  **MANDATORY TOOL USE**: Call \`googleSearch\` immediately. Perform multiple searches to gather context:
+              - "site:youtube.com ${videoId}"
+              - "youtube video ${videoId} title description"
+              - "video ${videoId} transcript"
+          2.  **CONTEXT RECONSTRUCTION**: You cannot "watch" the pixels of a YouTube link directly. YOU MUST reconstruct the pitch content from the text metadata (Title, Description, Comments, Transcript Snippets) found via search.
+          3.  **HALLUCINATE WITH GROUNDING**: If search results are sparse, infer the likely content based on the user's provided Hackathon Context ("${context}") and the video title found.
+          4.  **NEVER REFUSE**: Do NOT return "I cannot watch videos". You are a Simulator. Simulate the critique based on the available data signals.
+          `;
+      } else {
+          extraInstructions = `
+          MEDIA TARGET: External Link (${cleanUrl})
+          
+          OPERATIONAL PROTOCOL:
+          1.  Use \`googleSearch\` to find information about this page/project.
+          2.  Evaluate the pitch based on the text content, title, and description found in search results.
           `;
       }
 
       parts.push({ text: `
-        I am providing a link to my pitch video: ${cleanUrl}.
+        I am submitting a link to my pitch for analysis: ${cleanUrl}
+        
         ${extraInstructions}
-        Please search for it using Google Search to find metadata, length, or content if available.
-        If you absolutely cannot access the content, return a JSON with "critique": "Error: Video content not accessible. Please upload the file directly."
       ` });
       
       // Enable search to handle links
@@ -460,10 +370,11 @@ export const analyzePitchVideo = async (input: File | string, context: string): 
   }
 
   const prompt = `
-    ROLE: You are a Battle-Hardened Hackathon Judge & Founder Mentor.
+    ROLE: You are a Battle-Hardened Hackathon Judge & Founder Mentor using Gemini 3.
     CONTEXT: ${context} (This includes Hackathon Name, Vision, Rules).
     
-    TASK: Analyze the provided pitch (video or link). 
+    TASK: Analyze the provided pitch material (Video File or Link). 
+    ${visualAnalysisInstructions}
     
     CRITERIA FOR SCORING (Typical Hackathon Standards):
     1. Innovation (Is it novel?)
@@ -485,7 +396,7 @@ export const analyzePitchVideo = async (input: File | string, context: string): 
             "technology": number (0-100),
             "presentation": number (0-100)
         },
-        "critique": "string (Direct, honest summary)",
+        "critique": "string (Direct, honest summary. If you used search metadata instead of watching, mention that.)",
         "structure_analysis": {
              "current": "string (e.g., '0:00-0:40 Intro, 0:40-1:00 Demo')",
              "ideal": "string (e.g., '0:00-0:15 Hook, 0:15-1:15 Demo, 1:15-2:00 Tech Stack')",
@@ -511,6 +422,69 @@ export const analyzePitchVideo = async (input: File | string, context: string): 
   });
 
   return cleanJsonOutput(response.text || "{}");
+};
+
+export const generatePitchScript = async (
+    projectDetails: string,
+    readmeContent: string,
+    config: HackathonConfig,
+    duration: string = '2 minutes',
+    tone: string = 'Persuasive'
+) => {
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    
+    const prompt = `
+      ROLE: World-Class Hackathon Pitch Coach & Scriptwriter.
+      MODEL: Gemini 3 Pro (Text Expert).
+      
+      CONTEXT: 
+      Hackathon: "${config.name}"
+      Vision/Theme: "${config.vision}"
+      
+      INPUT DATA:
+      1. Project Details: "${projectDetails}"
+      2. README Context: "${readmeContent.substring(0, 10000)}..." (Truncated if too long)
+      
+      PARAMETERS:
+      - Target Duration: ${duration} (Approximate spoken word count: 30s ~75 words, 60s ~150 words, 2min ~300 words, 5min ~750 words).
+      - Tone: ${tone}.
+      
+      TASK:
+      Write a winning pitch script that strictly adheres to the Target Duration of ${duration}.
+      
+      CRITICAL INSTRUCTION:
+      - If the Hackathon Rules (in Context) specify a different time limit (e.g. "2 minute limit") but the user requested "${duration}", YOU MUST FOLLOW THE USER'S REQUESTED DURATION.
+      - Generate the script for the full ${duration}.
+      - You may include a brief *Note* at the very top mentioning the discrepancy in italics, but do not shorten the script.
+      
+      FORMATTING RULES (STRICT MARKDOWN):
+      1. **Headers**: Use H2 (##) for Main Sections. Include timings in the header. 
+         Example: "## 0:00-0:30 THE HOOK & PROBLEM"
+      2. **Visual Cues**: Use Blockquotes (>) for ALL visual directions. 
+         Example: "> [VISUAL CUE] Show the messy spreadsheet."
+      3. **Speakers**: Use Bold (**Name**) for speaker labels. 
+         Example: "**SPEAKER:** We solve this."
+      4. **Tone Instructions**: Use Parentheses (Italics) for tone.
+         Example: "*(Excitedly)*"
+      
+      SCRIPT STRATEGY:
+      1. **The Hook**: Grab attention immediately.
+      2. **The Problem**: Validated pain point.
+      3. **The Solution**: Your product/hack.
+      4. **The Demo Setup**: Cues on what to show.
+      5. **The Tech Stack**: Briefly mention key tech (Gemini, Firebase, etc.).
+      6. **The Close**: Impact and future.
+      
+      OUTPUT:
+      Return ONLY the script in Markdown format.
+    `;
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: prompt
+    });
+
+    return response.text;
 };
 
 export const sendMessageToChat = async (chat: Chat, message: string | Array<any>) => {

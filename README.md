@@ -3,47 +3,68 @@
 
 ![Status](https://img.shields.io/badge/Status-Functional_Beta-green)
 ![Tech](https://img.shields.io/badge/Built_With-Gemini_3_Pro_%7C_Veo_3.1_%7C_Live_API-cyan)
-![License](https://img.shields.io/badge/License-MIT-blue.svg)
+![SDK](https://img.shields.io/badge/SDK-@google/genai-blue)
 
-**Hackathon Copilot** is a "Hackathon Operating System" designed to scale mentorship. It digitizes the hackathon organizer into an AI Founder that can mentor, debug, and judge hundreds of participants simultaneously using the new **Gemini 3** model family.
+**Hackathon Copilot** is a "Hackathon Operating System" designed to solve the *Mentorship Gap*. It digitizes the hackathon organizer into an AI Founder that can mentor, debug, judge, and write scripts for hundreds of participants simultaneously using the new **Gemini 3** model family.
 
 ---
 
-## 💎 Gemini 3 Integration (Judging Criteria)
+## 💎 Gemini 3 Integration & Model Usage
 
-This project extensively uses the Google GenAI SDK (`@google/genai`) to implement the following models:
+We utilize the full spectrum of the `@google/genai` SDK to power specific features:
 
-| Feature | Model Used | Implementation Details |
+| Feature | Model / Tool | Implementation Details |
 | :--- | :--- | :--- |
-| **The Brain (Reasoning)** | `gemini-3-pro-preview` | Ingests PDF rules, markdown docs, and codebases into the context window to answer complex queries with RAG. |
-| **The Face (Video)** | `veo-3.1-fast-generate-preview` | Generates lifelike video responses from the Founder's avatar image, making mentorship feel personal. |
-| **The Voice (Real-time)** | `gemini-2.5-flash-native-audio` | Powers the **Live Call** feature. We stream raw PCM audio and video frames via WebSockets for <500ms latency. |
-| **The Eyes (Vision)** | `gemini-3-pro-preview` | Used in the **Multimodal Debugger** to analyze screenshots of terminal errors and UI bugs. |
-| **Search Grounding** | `googleSearch` Tool | Verifies and analyzes YouTube pitch links when direct video file access is restricted. |
+| **Architect & Build (Chat)** | `gemini-3-pro-preview` | Uses the massive context window to ingest uploaded documentation (PDFs, Markdown, Code) for RAG-grounded technical answers. |
+| **Visual Debugger** | `gemini-3-pro-preview` (Vision) | Analyzes screenshots of terminal logs or UI bugs. It performs pixel-level OCR to extract stack traces and suggest code fixes. |
+| **Live Mentorship Call** | `gemini-2.5-flash-native-audio` | Powers the **Live API** connection. We stream raw PCM audio (16kHz) and video frames (screen share) via WebSockets for <500ms latency interaction. |
+| **Founder Avatar Video** | `veo-3.1-fast-generate-preview` | Generates lifelike video responses from the Founder's static avatar image, making pitch critiques feel personal and human. |
+| **Pitch Link Analysis** | `googleSearch` Tool | Used when analyzing YouTube links to find metadata, transcripts, and context when direct video access is restricted. |
+| **Script Generator** | `gemini-3-pro-preview` | Synthesizes a project's `README.md` into a perfectly timed 30s, 60s, or 2min pitch script using advanced reasoning. |
 
 ---
 
-## ✨ Core Functionality
+## 🧠 End-to-End Workflow
 
-### 🏛️ For Organizers: Founder Control Deck
-*   **Persona Digitization**: Upload a selfie and a 30s voice briefing. The app trains a "Digital Twin" using **Veo** (for video) and **Gemini TTS/ElevenLabs** (for voice).
+### 1. 🏛️ For Organizers: The Founder Control Deck
+The organizer sets the "Soul" of the hackathon.
+*   **Persona Digitization**: Upload a selfie to train the **Veo** video model. Select a voice profile (e.g., Fenrir, Kore) for TTS and Live Audio.
 *   **Knowledge Ingestion**: Drag-and-drop technical documentation, judging rubrics, and rulebooks. The AI "reads" these instantly to ground its answers.
-*   **Health Dashboard**: Visual status of the Neural Clone and Knowledge Base.
+*   **Health Dashboard**: Visual status of the Neural Clone and Knowledge Base assets.
 
-### 🛠️ For Participants: The Workspace
-*   **💬 Context-Aware Chat**: Ask questions like *"Is this allowed under the specific rules?"* and get answers cited from the uploaded PDFs.
-*   **🐞 Multimodal Debugger**: Don't copy-paste logs. Take a screenshot or record your screen directly in the app. Gemini 3 identifies the bug visually.
-*   **📹 Pitch Simulator**: Upload your demo video. The AI watches it, scores it against the rubric, and generates a **video response** of the Founder giving you feedback.
-*   **📞 Live Mentorship Call**: A real-time video call interface. You can speak naturally, interrupt the AI, and even **Share Screen** for live pair programming.
+### 2. 🛠️ For Participants: The Neural Workspace
+Participants access a dashboard pre-loaded with the Organizer's context.
+
+#### A. 💬 Context-Aware Chat (RAG)
+*   Ask questions like *"Is this tech stack allowed?"* or *"How do I implement X feature?"*.
+*   The model answers citing the specific files uploaded by the organizer.
+
+#### B. 📞 Live Video Call (Gemini Live API)
+*   **Real-time Voice**: Speak naturally to the AI Founder. It handles interruptions and emotional tone.
+*   **Screen Share Vision**: Participants can toggle "Share Screen". The app sends video frames to the model, allowing the AI to "see" code and debug in real-time.
+*   **Dynamic Resolution**: The video stream quality automatically scales up when sharing code to ensure text legibility.
+
+#### C. 🐞 Visual Stack Trace
+*   Upload a screenshot of an error.
+*   Gemini 3 Pro analyzes the pixels, extracts the error text, identifies the file, and provides a copy-paste code fix.
+
+#### D. 🎤 Pitch Simulator (Veo & Search)
+*   **Input**: Upload a demo video file or paste a YouTube link.
+*   **Analysis**: The AI uses `googleSearch` (for links) or Vision (for files) to grade the pitch against the rubric.
+*   **Veo Response**: The system generates a **video of the Founder** delivering the feedback verbally.
+
+#### E. 📝 Neural Scriptwriter
+*   **Input**: Upload your project's `README.md`.
+*   **Output**: The AI reasons over your project details and generates a persuasive script formatted for specific time limits (30s/60s/2min).
 
 ---
 
 ## 🏗️ Technical Architecture
 
 *   **Frontend**: React 19, TypeScript, Vite.
-*   **Styling**: Tailwind CSS (Glassmorphism/Cyberpunk aesthetic).
-*   **State Management**: React Hooks + IndexedDB (for persisting large video assets).
-*   **Audio Pipeline**: Custom Web Audio API processors for PCM encoding/decoding (16kHz Input / 24kHz Output).
+*   **Audio Pipeline**: Custom `AudioContext` processing to convert browser audio (Float32) to Gemini-compatible PCM16 (Int16) and back.
+*   **Persistence**: Uses **IndexedDB** to store large assets (Avatar images, Video blobs) locally, ensuring the "Founder Persona" persists across reloads without a backend database.
+*   **Styling**: Tailwind CSS with a "Cyber-Glass" aesthetic.
 
 ---
 
@@ -79,24 +100,32 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 🧪 How to Test (Demo Flow)
+## 🧪 Demo Walkthrough (How to Judge)
 
-1.  **Splash Screen**: Click **"Launch Demo Account"** under "Founder".
+1.  **Splash Screen**: Click **"Launch Demo Account"** under the **Founder** card.
 2.  **Founder Dashboard**:
-    *   Notice the pre-loaded "Tech Stack" and "Rules" documents.
-    *   Click **"Rec Briefing"** to record a 5s voice sample (or use the default).
-    *   Click **"Publish Knowledge"**.
-3.  **Switch Roles**: Log out and join as a **Participant** (Launch Demo).
-4.  **Chat**: Ask *"What is the tech stack?"* (It will answer based on the Founder's docs).
-5.  **Pitch**: Go to the **PITCH** tab. Paste a YouTube link or upload an MP4. Watch the AI generate a video critique.
-6.  **Live Call**: Click **"LIVE VIDEO CALL"**. Speak to the AI. Try **Share Screen** to show it code.
+    *   Observe the pre-loaded "Tech Stack" and "Rules" documents.
+    *   Upload a photo of yourself (or use the default generated one) as the Avatar.
+    *   Click **"Publish Knowledge"** to hydrate the context.
+3.  **Switch Roles**: Log out and click **"Launch Demo Account"** under the **Participant** card.
+4.  **Test Script Gen**:
+    *   Go to the **SCRIPT** tab.
+    *   Upload a sample `README.md` (or type "AI that helps dogs find homes").
+    *   Click "Generate".
+5.  **Test Live Call**:
+    *   Click the **"LIVE UPLINK"** button in the Chat tab.
+    *   Speak to the AI. Click "Share Screen" and show it some code.
+6.  **Test Pitch**:
+    *   Go to the **PITCH** tab.
+    *   Paste a YouTube link (e.g., a past hackathon winner).
+    *   Watch the analysis and the **Veo-generated video response**.
 
 ---
 
 ## 🔮 Future Roadmap
 *   **Multi-Agent Swarm**: Spawning specialized agents (Designer, Backend Dev) into the chat.
 *   **IDE Plugin**: Direct integration into VS Code.
-*   **Post-Event Analytics**: Aggregated report of common participant struggles.
+*   **Post-Event Analytics**: Aggregated report of common participant struggles for organizers.
 
 ---
 

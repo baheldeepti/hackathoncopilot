@@ -31,12 +31,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
   
   // Default to Founder Mode if avatar is present
   const [founderMode, setFounderMode] = useState(!!config.avatarFile);
-  // Default to Auto Video being FALSE to prevent billing blocks during submission
   const [autoVideo, setAutoVideo] = useState(false); 
-  const [veoDisabled, setVeoDisabled] = useState(false); // New state to lock video if quota hit
-
-  // Check if ElevenLabs is Active
-  const isElevenLabsActive = config.founderVoice === 'ElevenLabs' || (!!config.elevenLabsKey && !!config.elevenLabsVoiceId && config.founderVoice !== 'Fenrir' && config.founderVoice !== 'Puck' && config.founderVoice !== 'Charon' && config.founderVoice !== 'Kore' && config.founderVoice !== 'Zephyr');
+  const [veoDisabled, setVeoDisabled] = useState(false); 
 
   // LIVE CALL STATE
   const [isLiveCallActive, setIsLiveCallActive] = useState(false);
@@ -102,27 +98,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
     };
   }, []);
 
-  const handleClearHistory = () => {
-      if (window.confirm("Clear chat history? This cannot be undone.")) {
-          const defaultMsg: ChatMessage = { role: 'model', text: `Memory reset. I'm ready for a fresh start. What's next?` };
-          setMessages([defaultMsg]);
-          localStorage.removeItem('hc_chat_history');
-      }
-  };
-
   const forceRefreshKey = async () => {
       try {
           // @ts-ignore
           if (window.aistudio && window.aistudio.openSelectKey) {
               // @ts-ignore
               await window.aistudio.openSelectKey();
-              // Reset disabled state to allow retry
               setVeoDisabled(false);
               setAutoVideo(true);
               alert("Key refreshed! Video generation unlocked.");
           } else {
-              // Fallback for Localhost / Non-IDX environments where window.aistudio isn't available
-              // If the user says they have paid, we trust them and unlock the UI.
               if(window.confirm("Confirm: Has a valid paid API key been configured in your environment?")) {
                   setVeoDisabled(false);
                   setAutoVideo(true);
@@ -131,7 +116,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
           }
       } catch (e) {
           console.error(e);
-          // Safety fallback
           setVeoDisabled(false);
           setAutoVideo(true);
       }
@@ -165,7 +149,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
           
           setLiveCallStatus('connected');
           
-          // Start sending video frames if video element is ready
           if (userVideoRef.current) {
               liveSessionRef.current.startVideoStreaming(userVideoRef.current);
           }
@@ -180,32 +163,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
       if (!userVideoRef.current) return;
 
       if (isScreenSharing) {
-          // Revert to Webcam
           if (webcamStreamRef.current) {
               userVideoRef.current.srcObject = webcamStreamRef.current;
               setIsScreenSharing(false);
+              liveSessionRef.current?.setScreenShareMode(false);
           } else {
-              // Restart webcam if lost
               const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
               webcamStreamRef.current = stream;
               userVideoRef.current.srcObject = stream;
               setIsScreenSharing(false);
+              liveSessionRef.current?.setScreenShareMode(false);
           }
       } else {
           try {
-              // Start Screen Share
               const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
               
-              // Handle user stopping share via browser UI
               screenStream.getVideoTracks()[0].onended = () => {
                   if (userVideoRef.current && webcamStreamRef.current) {
                       userVideoRef.current.srcObject = webcamStreamRef.current;
                       setIsScreenSharing(false);
+                      liveSessionRef.current?.setScreenShareMode(false);
                   }
               };
 
               userVideoRef.current.srcObject = screenStream;
               setIsScreenSharing(true);
+              liveSessionRef.current?.setScreenShareMode(true);
           } catch (e) {
               console.error("Screen share failed/cancelled", e);
           }
@@ -245,32 +228,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
             bytes[i] = binaryString.charCodeAt(i);
         }
 
-        // Try standard decoding first (MP3/WAV from ElevenLabs)
-        try {
-            // Must use slice(0) to ensure ArrayBuffer copy
-            const decodedBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-            const source = ctx.createBufferSource();
-            source.buffer = decodedBuffer;
-            source.connect(ctx.destination);
-            source.onended = () => setIsSpeaking(false);
-            setIsSpeaking(true);
-            source.start(0);
-        } catch (decodeErr) {
-             // Fallback to Raw PCM (Gemini Default - No Headers)
-            const dataInt16 = new Int16Array(bytes.buffer);
-            const frameCount = dataInt16.length; // Mono assumption
-            const buffer = ctx.createBuffer(1, frameCount, 24000);
-            const channelData = buffer.getChannelData(0);
-            for (let i = 0; i < frameCount; i++) {
-                channelData[i] = dataInt16[i] / 32768.0;
-            }
-            const source = ctx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(ctx.destination);
-            source.onended = () => setIsSpeaking(false);
-            setIsSpeaking(true);
-            source.start(0);
+        const dataInt16 = new Int16Array(bytes.buffer);
+        const frameCount = dataInt16.length; 
+        const buffer = ctx.createBuffer(1, frameCount, 24000);
+        const channelData = buffer.getChannelData(0);
+        for (let i = 0; i < frameCount; i++) {
+            channelData[i] = dataInt16[i] / 32768.0;
         }
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.onended = () => setIsSpeaking(false);
+        setIsSpeaking(true);
+        source.start(0);
         
     } catch (e) {
         console.error("Audio playback failed completely", e);
@@ -299,14 +269,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
     const draw = () => {
         animationFrameRef.current = requestAnimationFrame(draw);
         analyser.getByteFrequencyData(dataArray);
-        ctx.fillStyle = '#020617';
+        ctx.fillStyle = '#0f172a'; // Match input bg
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         const barWidth = (canvas.width / bufferLength) * 2.5;
         let barHeight;
         let x = 0;
         for (let i = 0; i < bufferLength; i++) {
             barHeight = dataArray[i] / 2;
-            ctx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
+            ctx.fillStyle = `rgb(34, 211, 238)`; // Cyan
             ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
             x += barWidth + 1;
         }
@@ -351,7 +321,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
   const checkApiKeyAndGenerateVideo = async (msgIndex: number, text: string, retryCount = 0) => {
       if (!config.avatarFile || veoDisabled) return;
       
-      // Update state to generating
       setMessages(prev => prev.map((m, i) => i === msgIndex ? { ...m, isVideoGenerating: true, videoError: undefined } : m));
       
       try {
@@ -360,14 +329,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
       } catch (err: any) {
           console.error(`Generation attempt ${retryCount} failed`, err);
           
-          // Auto-Retry logic for Billing/Quota
           if (retryCount === 0 && (err.toString().includes('429') || (err.message && err.message.includes('quota')))) {
               try {
                   // @ts-ignore
                   if (window.aistudio && window.aistudio.openSelectKey) {
                       // @ts-ignore
                       await window.aistudio.openSelectKey();
-                      // Retry once
                       setTimeout(() => checkApiKeyAndGenerateVideo(msgIndex, text, 1), 1000);
                       return;
                   }
@@ -375,11 +342,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
           }
 
           let errorMsg = "Generation failed";
-          // ENHANCED ERROR HANDLING FOR 429
           if (err.toString().includes('429') || (err.message && err.message.includes('quota'))) {
-              errorMsg = "Veo Quota Exceeded (Billing Required)";
+              errorMsg = "Veo Quota Exceeded";
               setAutoVideo(false);
-              setVeoDisabled(true); // LOCK Veo to prevent loop
+              setVeoDisabled(true); 
               setMessages(prev => [...prev, { 
                   role: 'model', 
                   text: "**[SYSTEM ALERT]** Veo video generation quota exceeded. Auto-switching to Audio-Only Mode." 
@@ -392,10 +358,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
   const cleanResponseText = (text: string) => text.replace(/\*\s*\(Spoken Script Mode Active\)\s*\*\*/gi, '').replace(/\(Spoken Script Mode Active\)/gi, '').trim();
 
   const handleRetryVideo = (index: number, text: string) => {
-      // If disabled, try to re-enable (assuming user fixed the issue)
       if (veoDisabled) {
-          forceRefreshKey(); // Attempt unlock
-          if (veoDisabled) return; // If still disabled (user cancelled), stop.
+          forceRefreshKey(); 
+          if (veoDisabled) return; 
       }
       checkApiKeyAndGenerateVideo(index, cleanResponseText(text), 0);
   };
@@ -433,15 +398,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
               fullText += chunkText;
               const displayText = cleanResponseText(fullText);
               
-              const isElevenLabs = isElevenLabsActive && config.elevenLabsKey && config.elevenLabsVoiceId;
-
               setMessages(prev => {
                   const newArr = [...prev];
                   newArr[newArr.length - 1] = { 
                       role: 'model', 
                       text: displayText.replace("[ESCALATE]", "").trim(),
-                      isEscalated: displayText.includes("[ESCALATE]") && !isElevenLabs, // Hide Escalate tag if voice is active
-                      isClonedVoice: !!isElevenLabs
+                      isEscalated: displayText.includes("[ESCALATE]")
                   };
                   return newArr;
               });
@@ -449,13 +411,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
       }
       if (isFounder && fullText) {
          try {
-             // Use ElevenLabs logic if configured
-             const isElevenLabs = isElevenLabsActive && config.elevenLabsKey && config.elevenLabsVoiceId;
-             
              const audioData = await generateFounderSpeech(
                  fullText, 
-                 isElevenLabs ? '' : (config.founderVoice || 'Fenrir'),
-                 isElevenLabs ? { apiKey: config.elevenLabsKey!, voiceId: config.elevenLabsVoiceId! } : undefined
+                 config.founderVoice || 'Fenrir'
              );
              if (audioData) await playAudioResponse(audioData);
          } catch (speechErr) { console.error(speechErr); }
@@ -473,22 +431,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
         <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-cyan-400 animate-pulse' : 'bg-green-500'} transition-colors`}></div>
-                <span className="font-mono text-sm text-cyan-400">ONLINE // GEMINI-3-PRO-PREVIEW</span>
-            </div>
-            
-            {/* VOICE SYSTEM INDICATOR */}
-            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold border tracking-wider ${isElevenLabsActive ? 'bg-pink-900/30 border-pink-500/50 text-pink-300' : 'bg-cyan-900/30 border-cyan-500/50 text-cyan-300'}`}>
-                {isElevenLabsActive ? (
-                    <>
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                        <span>NEURAL CLONE (ELEVENLABS)</span>
-                    </>
-                ) : (
-                    <>
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.536 8.464a5 5 0 000 7.072m-2.828-9.9a9 9 0 000 12.728M12 12h.01" /></svg>
-                        <span>GEMINI 2.5 TTS ({config.founderVoice || 'FENRIR'})</span>
-                    </>
-                )}
+                <span className="font-mono text-sm text-cyan-400">GEMINI-3-PRO // {config.founderVoice || 'FENRIR'}</span>
             </div>
         </div>
         
@@ -496,16 +439,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
              <Button 
                 onClick={startLiveCall}
                 disabled={isLiveCallActive}
-                className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 border-red-500 text-white shadow-[0_0_10px_rgba(220,38,38,0.4)] animate-pulse"
+                className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 border-red-500 text-white shadow-[0_0_10px_rgba(220,38,38,0.4)]"
             >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                LIVE VIDEO CALL
+                LIVE UPLINK
             </Button>
             
-            {/* Founder Mode Toggle */}
             <div 
                 onClick={() => setFounderMode(!founderMode)}
-                className={`cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${founderMode ? 'bg-cyan-900/50 border-cyan-500 shadow-[0_0_10px_rgba(34,211,238,0.3)]' : 'bg-slate-800 border-slate-600'}`}
+                className={`cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${founderMode ? 'bg-cyan-900/50 border-cyan-500' : 'bg-slate-800 border-slate-600'}`}
             >
                 <div className={`w-3 h-3 rounded-full transition-colors ${founderMode ? 'bg-cyan-400' : 'bg-slate-500'}`}></div>
                 <span className={`text-xs font-bold uppercase tracking-wider ${founderMode ? 'text-cyan-300' : 'text-slate-400'}`}>
@@ -513,247 +455,157 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
                 </span>
             </div>
 
-            {/* Auto Video Toggle - Shows Disabled State if Veo Quota hit */}
             {founderMode && (
                 <div 
-                    onClick={() => {
-                        if (veoDisabled) {
-                            forceRefreshKey();
-                        } else {
-                            setAutoVideo(!autoVideo);
-                        }
-                    }}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${veoDisabled ? 'cursor-pointer bg-red-900/30 border-red-500' : autoVideo ? 'cursor-pointer bg-pink-900/50 border-pink-500 shadow-[0_0_10px_rgba(236,72,153,0.3)]' : 'cursor-pointer bg-slate-800 border-slate-600'}`}
-                    title={veoDisabled ? "Click to Re-Enable Video (Requires Paid Key)" : "Toggle Auto Video"}
+                    onClick={() => { if (veoDisabled) forceRefreshKey(); else setAutoVideo(!autoVideo); }}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${veoDisabled ? 'cursor-pointer bg-red-900/30 border-red-500' : autoVideo ? 'cursor-pointer bg-pink-900/50 border-pink-500' : 'cursor-pointer bg-slate-800 border-slate-600'}`}
                 >
-                    <svg className={`w-3 h-3 ${autoVideo && !veoDisabled ? 'text-pink-400' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                     <span className={`text-xs font-bold uppercase tracking-wider ${autoVideo && !veoDisabled ? 'text-pink-300' : veoDisabled ? 'text-red-400' : 'text-slate-400'}`}>
-                        {veoDisabled ? 'Video Disabled (Click to Fix)' : 'Auto Video'}
+                        {veoDisabled ? 'Veo Quota' : 'Auto Video'}
                     </span>
                 </div>
             )}
         </div>
       </div>
 
-      {/* LIVE CALL OVERLAY */}
+      {/* IMMERSIVE LIVE CALL HUD */}
       {isLiveCallActive && (
-          <div className="absolute inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-6 animate-fade-in">
-              <div className="w-full h-full max-w-4xl relative flex flex-col rounded-2xl overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl">
-                   
-                   {/* STATUS HEADER */}
-                   <div className="absolute top-6 left-0 right-0 flex justify-center z-20 pointer-events-none">
-                        <div className={`px-5 py-2 rounded-full backdrop-blur-md border flex items-center gap-3 shadow-2xl transition-colors duration-500 ${
-                            liveCallStatus === 'connected' ? 'bg-green-900/60 border-green-500/50 text-green-400 shadow-green-900/20' :
-                            liveCallStatus === 'error' ? 'bg-red-900/60 border-red-500/50 text-red-400 shadow-red-900/20' :
-                            'bg-yellow-900/60 border-yellow-500/50 text-yellow-400 shadow-yellow-900/20'
-                        }`}>
-                            <div className={`w-2.5 h-2.5 rounded-full ${liveCallStatus === 'connected' ? 'bg-green-500' : 'bg-current animate-ping'}`}></div>
-                            <span className="text-xs font-bold font-mono uppercase tracking-widest drop-shadow-sm">
-                                {liveCallStatus === 'connected' ? 'SECURE CONNECTION ESTABLISHED' : 
-                                 liveCallStatus === 'error' ? 'CONNECTION FAILED' : 'NEGOTIATING HANDSHAKE...'}
-                            </span>
-                        </div>
+          <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center p-0 animate-fade-in overflow-hidden">
+              {/* HUD GRID OVERLAY */}
+              <div className="absolute inset-0 pointer-events-none opacity-20" style={{
+                  backgroundImage: `linear-gradient(rgba(34, 211, 238, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(34, 211, 238, 0.1) 1px, transparent 1px)`,
+                  backgroundSize: '100px 100px'
+              }}></div>
+              
+              {/* TOP BAR */}
+              <div className="absolute top-0 w-full h-16 bg-gradient-to-b from-black via-black/80 to-transparent flex justify-between items-start p-6 z-40">
+                   <div className="flex gap-4">
+                       <div className="text-cyan-500 font-mono text-xs">
+                           <div>SYS.CONNECTION: <span className="text-white">{liveCallStatus?.toUpperCase()}</span></div>
+                           <div>LATENCY: <span className="text-white">~400ms</span></div>
+                           <div>MODE: <span className="text-white">NATIVE_AUDIO_SOCKET</span></div>
+                       </div>
                    </div>
+                   <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-red-600 animate-pulse"></div>
+                        <span className="text-red-500 font-bold tracking-widest text-sm">REC</span>
+                   </div>
+              </div>
 
-                   {/* Founder Avatar View (Center Stage) */}
-                   <div className="flex-1 relative flex items-center justify-center bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-800 to-slate-950">
-                        <div className={`relative w-64 h-64 rounded-full p-2 ${isLiveAgentSpeaking ? 'border-4 border-cyan-400 shadow-[0_0_50px_rgba(34,211,238,0.5)] scale-105' : 'border-4 border-slate-700'} transition-all duration-300`}>
+              {/* MAIN CONTENT LAYER */}
+              <div className="relative w-full h-full flex items-center justify-center">
+                   
+                   {/* CENTER AVATAR (FOUNDER) */}
+                   <div className="relative z-10 transform transition-all duration-300">
+                        <div className={`relative w-64 h-64 md:w-96 md:h-96 rounded-full p-1 ${isLiveAgentSpeaking ? 'border-4 border-cyan-400 shadow-[0_0_100px_rgba(34,211,238,0.4)] scale-105' : 'border-2 border-slate-800'} transition-all duration-300`}>
                             {avatarUrl ? (
-                                <img src={avatarUrl} className="w-full h-full rounded-full object-cover" />
+                                <img src={avatarUrl} className="w-full h-full rounded-full object-cover grayscale opacity-80" />
                             ) : (
-                                <div className="w-full h-full bg-slate-800 rounded-full flex items-center justify-center">
-                                    <svg className="w-20 h-20 text-slate-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>
+                                <div className="w-full h-full bg-slate-900 rounded-full flex items-center justify-center">
+                                    <svg className="w-32 h-32 text-slate-700" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>
                                 </div>
                             )}
-                            {/* Pulse Rings */}
+                            
+                            {/* HOLOGRAM SCANLINES */}
+                            <div className="absolute inset-0 rounded-full bg-[linear-gradient(rgba(34,211,238,0.1)_1px,transparent_1px)] bg-[size:100%_4px] opacity-30 pointer-events-none"></div>
+
+                            {/* RING ANIMATION */}
                             {isLiveAgentSpeaking && (
-                                <>
-                                    <div className="absolute inset-0 border-2 border-cyan-500 rounded-full animate-ping opacity-50"></div>
-                                    <div className="absolute inset-0 border-2 border-cyan-500 rounded-full animate-ping opacity-30" style={{animationDelay: '0.3s'}}></div>
-                                </>
+                                <div className="absolute -inset-4 border border-cyan-500/50 rounded-full animate-[spin_10s_linear_infinite]"></div>
                             )}
                         </div>
-
-                        {/* Speaking Badge */}
-                        {isLiveAgentSpeaking && (
-                             <div className="absolute bottom-28 bg-cyan-950/80 border border-cyan-500 text-cyan-400 px-4 py-1.5 rounded-full text-[10px] font-bold tracking-[0.2em] uppercase animate-pulse shadow-[0_0_15px_rgba(34,211,238,0.3)] backdrop-blur-sm z-10">
-                                 Voice Activity Detected
-                             </div>
-                        )}
-
-                        <div className="absolute bottom-8 text-center">
-                             <h3 className="text-2xl font-bold text-white tracking-widest uppercase">
-                                 {config.name} Founder
-                             </h3>
-                             <div className="inline-block mt-2 px-3 py-1 bg-slate-800 rounded border border-slate-700 text-[10px] text-slate-400">
-                                 <span className="text-green-400 font-bold">INFO:</span> Live Call uses Native Audio for ultra-low latency. <br/>Clone Voice (ElevenLabs) is active in text chat.
-                             </div>
+                        <div className="mt-8 text-center">
+                             <h3 className="text-2xl font-black text-white tracking-[0.2em] uppercase font-mono">{config.name}</h3>
+                             <p className="text-cyan-500 text-xs tracking-widest mt-1">FOUNDER UPLINK ACTIVE</p>
                         </div>
                    </div>
 
-                   {/* User Video (PiP) */}
-                   <div className="absolute top-6 right-6 w-56 aspect-video bg-black rounded-lg border-2 border-slate-600 shadow-2xl overflow-hidden group z-30">
+                   {/* USER PIP (Right Side) */}
+                   <div className="absolute bottom-32 right-8 w-64 aspect-video bg-slate-900 border border-slate-700 rounded-lg overflow-hidden shadow-2xl z-30 group">
                        <video ref={userVideoRef} autoPlay muted className={`w-full h-full object-cover ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`} />
-                       
-                       {/* Overlay info */}
-                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2 flex items-center justify-between">
-                            <div className="flex items-center gap-1.5">
-                                <div className={`w-2 h-2 rounded-full animate-pulse ${isScreenSharing ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
-                                <span className="text-[10px] font-bold text-white uppercase tracking-wider">{isScreenSharing ? 'Screen Share' : 'Your Camera'}</span>
-                            </div>
+                       <div className="absolute top-2 left-2 bg-black/60 px-2 py-0.5 rounded text-[8px] text-white font-mono uppercase">
+                           {isScreenSharing ? 'SCREEN FEED' : 'YOUR FEED'}
                        </div>
-                       
-                       {/* Screen Share Overlay Indicator */}
-                       {isScreenSharing && (
-                           <div className="absolute inset-0 flex items-center justify-center bg-yellow-500/10 pointer-events-none">
-                               <div className="bg-yellow-500/90 text-black text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wide">
-                                   Sharing Screen
-                               </div>
-                           </div>
-                       )}
-
-                       {/* Screen Share Toggle Mini-Btn */}
-                       <button 
-                           onClick={toggleScreenShare}
-                           className="absolute top-2 right-2 bg-black/60 hover:bg-slate-700 p-1.5 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                           title={isScreenSharing ? "Stop Sharing" : "Share Screen"}
-                       >
-                           {isScreenSharing ? (
-                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                           ) : (
-                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-                           )}
-                       </button>
                    </div>
+              </div>
 
-                   {/* Controls */}
-                   <div className="h-24 bg-slate-900 border-t border-slate-800 flex items-center justify-center gap-6 z-30">
-                        <Button 
-                            variant={isScreenSharing ? "danger" : "secondary"} 
-                            onClick={toggleScreenShare} 
-                            className={`px-8 rounded-full border-2 ${isScreenSharing ? 'animate-pulse' : ''}`}
-                        >
-                            {isScreenSharing ? (
-                                <>
-                                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                                    STOP SHARING
-                                </>
-                            ) : (
-                                <>
-                                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
-                                    SHARE SCREEN
-                                </>
-                            )}
-                        </Button>
-                        <Button variant="danger" onClick={endLiveCall} className="px-10 rounded-full shadow-[0_0_20px_rgba(220,38,38,0.5)] border-2 border-red-500">
-                            <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z"></path></svg>
-                            END CALL
-                        </Button>
-                   </div>
+              {/* BOTTOM CONTROL BAR */}
+              <div className="absolute bottom-0 w-full h-24 bg-black border-t border-slate-800 flex items-center justify-center gap-8 z-50">
+                  <button 
+                      onClick={toggleScreenShare}
+                      className={`flex flex-col items-center gap-1 group ${isScreenSharing ? 'text-yellow-400' : 'text-slate-400 hover:text-white'}`}
+                  >
+                      <div className={`p-3 rounded-full border transition-all ${isScreenSharing ? 'border-yellow-500 bg-yellow-500/10' : 'border-slate-700 bg-slate-900'}`}>
+                           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                      </div>
+                      <span className="text-[10px] font-bold tracking-widest uppercase">{isScreenSharing ? 'Stop Share' : 'Share Screen'}</span>
+                  </button>
+
+                  <button 
+                      onClick={endLiveCall}
+                      className="flex flex-col items-center gap-1 group text-red-500 hover:text-red-400"
+                  >
+                      <div className="p-4 rounded-full border border-red-500 bg-red-500/10 shadow-[0_0_20px_rgba(220,38,38,0.4)] transition-transform group-hover:scale-110">
+                           <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                      </div>
+                      <span className="text-[10px] font-bold tracking-widest uppercase">Terminate</span>
+                  </button>
               </div>
           </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      {/* Messages Area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-6 scroll-smooth">
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
             
-            {/* Founder Avatar with visual indicator */}
             {msg.role === 'model' && founderMode && (
-                <div className="mr-3 flex flex-col items-center justify-start mt-1">
-                    <div className={`w-10 h-10 rounded-full overflow-hidden border-2 ${isSpeaking && idx === messages.length - 1 ? 'border-cyan-400 shadow-[0_0_10px_cyan]' : 'border-slate-700'} relative`}>
+                <div className="mr-3 flex flex-col items-center justify-start">
+                    <div className={`w-10 h-10 rounded-full overflow-hidden border-2 ${isSpeaking && idx === messages.length - 1 ? 'border-cyan-400 shadow-[0_0_15px_cyan]' : 'border-slate-700'}`}>
                          {avatarUrl ? (
                             <img src={avatarUrl} alt="Founder" className="w-full h-full object-cover" />
                         ) : (
-                             <div className="w-full h-full bg-slate-800 flex items-center justify-center">
-                                 <svg className="w-5 h-5 text-slate-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>
-                             </div>
-                        )}
-                        {/* Audio Speaking Ring Overlay */}
-                        {isSpeaking && idx === messages.length - 1 && (
-                            <div className="absolute inset-0 border-2 border-cyan-400 rounded-full animate-ping"></div>
+                             <div className="w-full h-full bg-slate-800 flex items-center justify-center text-xs text-slate-500">AI</div>
                         )}
                     </div>
                 </div>
             )}
 
             <div className={`max-w-[85%] flex flex-col gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                <div className={`rounded-2xl px-5 py-4 relative shadow-md text-sm leading-relaxed transition-all duration-500 ${
+                <div className={`px-5 py-4 relative shadow-lg text-sm leading-relaxed ${
                     msg.role === 'user' 
-                      ? 'bg-cyan-900/30 text-cyan-50 border border-cyan-800/50 rounded-br-sm' 
-                      : (msg.videoUrl || msg.isVideoGenerating) 
-                        ? 'bg-slate-800 text-slate-200 border border-pink-500/30 shadow-[0_0_10px_rgba(236,72,153,0.15)] rounded-bl-sm'
-                        : 'bg-slate-800 text-slate-200 border border-slate-700/80 rounded-bl-sm'
+                      ? 'bg-gradient-to-br from-cyan-900/40 to-slate-900 text-cyan-50 border border-cyan-800/50 rounded-2xl rounded-tr-sm' 
+                      : 'bg-slate-800/80 backdrop-blur text-slate-200 border border-slate-700 rounded-2xl rounded-tl-sm'
                 }`}>
-                    {/* Visual Indicator for Founder Video Clone */}
                     {msg.role === 'model' && (msg.videoUrl || msg.isVideoGenerating) && (
-                        <div className="absolute -top-2.5 left-4 flex items-center gap-1.5 px-2 py-0.5 bg-slate-900 border border-pink-500/50 text-pink-400 text-[9px] font-mono tracking-widest rounded-full uppercase shadow-sm z-10">
-                            <span className="w-1.5 h-1.5 bg-pink-500 rounded-full animate-pulse"></span>
-                            Founder Clone
+                        <div className="absolute -top-3 left-4 px-2 py-0.5 bg-slate-950 border border-pink-500/50 text-pink-400 text-[9px] font-mono tracking-widest rounded uppercase shadow-sm z-10">
+                            Veo Clone
                         </div>
                     )}
                     
-                    {/* NEW: Visual Indicator for Neural Voice Clone (Audio Only) */}
-                    {msg.role === 'model' && msg.isClonedVoice && !msg.videoUrl && !msg.isVideoGenerating && (
-                        <div className="absolute -top-2.5 right-4 flex items-center gap-1.5 px-2 py-0.5 bg-slate-900 border border-pink-500/50 text-pink-400 text-[9px] font-mono tracking-widest rounded-full uppercase shadow-sm z-10">
-                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
-                             Neural Voice
-                        </div>
-                    )}
-
                     <div className="flex flex-col md:flex-row gap-4">
-                        <div className="prose prose-invert max-w-none text-sm prose-p:my-1 prose-headings:text-slate-100 prose-headings:my-2 prose-strong:text-cyan-300 prose-ul:my-2 prose-li:my-0.5">
+                        <div className="prose prose-invert max-w-none text-sm">
                             <ReactMarkdown>{msg.text}</ReactMarkdown>
                         </div>
 
-                        {/* Video Player or Error State */}
                         {(msg.videoUrl || msg.isVideoGenerating || msg.videoError) && (
-                             <div className="w-full md:w-64 flex-shrink-0 flex flex-col gap-1 animate-fade-in mt-2 md:mt-0">
+                             <div className="w-full md:w-64 flex-shrink-0 flex flex-col gap-1 mt-2 md:mt-0">
                                  {msg.isVideoGenerating ? (
-                                    <div className="aspect-video bg-slate-950 rounded border border-slate-700 flex flex-col items-center justify-center gap-2 p-4 text-center relative overflow-hidden">
+                                    <div className="aspect-video bg-slate-950 rounded border border-slate-700 flex flex-col items-center justify-center gap-2 p-4 relative overflow-hidden">
                                         <div className="absolute inset-0 bg-pink-500/5 animate-pulse"></div>
-                                        <div className="w-6 h-6 border-2 border-pink-500 border-t-transparent rounded-full animate-spin relative z-10"></div>
-                                        <span className="text-[10px] text-pink-400 animate-pulse font-mono relative z-10">SYNTHESIZING CLONE...</span>
+                                        <div className="w-6 h-6 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+                                        <span className="text-[9px] text-pink-400 font-mono">SYNTHESIZING...</span>
                                     </div>
                                  ) : msg.videoError ? (
-                                     <div className="aspect-video bg-slate-950 rounded border border-red-500/30 flex flex-col items-center justify-center p-4 text-center">
-                                         <svg className="w-6 h-6 text-red-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                                         <span className="text-[10px] text-red-300 font-bold uppercase block">{msg.videoError}</span>
-                                         
-                                         {msg.videoError.includes('Billing') ? (
-                                             <div className="flex flex-col gap-2 w-full mt-2">
-                                                 <a href="https://console.cloud.google.com/billing" target="_blank" className="text-[9px] bg-red-600 hover:bg-red-500 text-white py-1 px-2 rounded font-bold uppercase">
-                                                     Manage Billing
-                                                 </a>
-                                                 <button 
-                                                     onClick={forceRefreshKey} 
-                                                     className="text-[9px] text-slate-400 hover:text-white underline"
-                                                 >
-                                                     I paid! Refresh Key
-                                                 </button>
-                                             </div>
-                                         ) : (
-                                            <button 
-                                                onClick={() => handleRetryVideo(idx, msg.text)}
-                                                className="text-[9px] text-red-400/70 mt-1 block hover:text-white"
-                                            >
-                                                Tap to Retry
-                                            </button>
+                                     <div className="aspect-video bg-slate-950 rounded border border-red-900/30 flex flex-col items-center justify-center p-4 text-center">
+                                         <span className="text-[10px] text-red-400 font-bold uppercase">{msg.videoError}</span>
+                                         {msg.videoError.includes('Billing') && (
+                                             <button onClick={forceRefreshKey} className="text-[9px] text-slate-400 underline mt-1">Refresh Key</button>
                                          )}
                                      </div>
                                  ) : (
-                                    <div className="rounded overflow-hidden border border-pink-500/50 shadow-[0_0_15px_rgba(236,72,153,0.3)] relative group">
-                                        {/* Video Player Badge */}
-                                        <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md border border-pink-500/30 rounded text-[10px] font-bold text-pink-400 flex items-center gap-1.5 z-10">
-                                             <div className="w-1.5 h-1.5 bg-pink-500 rounded-full animate-pulse"></div>
-                                             AI REPLICA
-                                        </div>
-                                        
+                                    <div className="rounded overflow-hidden border border-pink-500/30 shadow-[0_0_15px_rgba(236,72,153,0.2)]">
                                         <video controls autoPlay src={msg.videoUrl} className="w-full aspect-video bg-black" />
-                                        <div className="bg-slate-900 p-1 text-[8px] text-center text-pink-400 font-mono tracking-widest uppercase border-t border-slate-800">
-                                            Video Generated by Veo 3.1
-                                        </div>
                                     </div>
                                  )}
                              </div>
@@ -764,12 +616,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
           </div>
         ))}
         {isLoading && (
-             <div className="flex justify-start items-center gap-2 animate-fade-in">
-                 {founderMode && (
-                     <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center">
-                         <div className="w-4 h-4 rounded-full bg-slate-600 animate-pulse"></div>
-                     </div>
-                 )}
+             <div className="flex justify-start items-center gap-2 animate-fade-in pl-14">
                  <div className="bg-slate-800 rounded-full px-4 py-3 border border-slate-700 flex gap-1.5">
                     <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
                     <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{animationDelay: '0.15s'}}></span>
@@ -780,53 +627,53 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ config }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="p-4 bg-slate-900 border-t border-slate-800 flex flex-col gap-2">
+      {/* Input Area */}
+      <div className="p-4 bg-slate-900/90 backdrop-blur border-t border-slate-800">
         {mediaBlob && (
-             <div className="flex items-center gap-3 bg-cyan-900/20 w-fit px-3 py-1.5 rounded-full border border-cyan-500/30 animate-fade-in self-start">
+             <div className="flex items-center gap-3 bg-cyan-900/20 w-fit px-3 py-1 mb-2 rounded border border-cyan-500/30 animate-fade-in">
                  <span className="text-xs text-cyan-200 font-mono uppercase">
-                     {mediaBlob.type === 'audio' ? 'Voice Memo Ready' : 'Video Memo Ready'}
+                     {mediaBlob.type === 'audio' ? 'Voice Memo Attached' : 'Video Memo Attached'}
                  </span>
-                 <button onClick={clearMedia} className="text-slate-500 hover:text-red-400 ml-1">×</button>
+                 <button onClick={clearMedia} className="text-slate-500 hover:text-white ml-2">×</button>
              </div>
         )}
 
-        <div className="flex gap-2 items-center relative">
+        <div className="flex gap-3 items-center relative">
             {recordingType === 'audio' && (
-                <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-between px-2 rounded-lg border border-cyan-500/50">
-                    <canvas ref={canvasRef} className="h-full w-full rounded" width={300} height={40} />
-                    <button onClick={stopRecording} className="ml-4 p-2 bg-red-500/20 text-red-400 rounded-full">
-                        <div className="w-3 h-3 bg-red-500 rounded-sm"></div>
+                <div className="absolute inset-0 bg-slate-900 z-20 flex items-center justify-between px-2 rounded-lg border border-cyan-500/50">
+                    <canvas ref={canvasRef} className="h-full flex-1 rounded opacity-50" width={300} height={40} />
+                    <button onClick={stopRecording} className="ml-4 p-2 text-red-400 hover:text-white">
+                        <div className="w-3 h-3 bg-current rounded-sm"></div>
                     </button>
                 </div>
             )}
 
             {!recordingType ? (
                 <>
-                    <button onClick={() => startRecording('audio')} disabled={isLoading} className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/50 transition-colors">
+                    <button onClick={() => startRecording('audio')} disabled={isLoading} className="p-3 rounded-xl bg-slate-800 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/50 transition-all hover:-translate-y-0.5">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
-                    <button onClick={() => startRecording('video')} disabled={isLoading} className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-pink-400 border border-slate-700 hover:border-pink-500/50 transition-colors">
+                    <button onClick={() => startRecording('video')} disabled={isLoading} className="p-3 rounded-xl bg-slate-800 text-slate-400 hover:text-pink-400 border border-slate-700 hover:border-pink-500/50 transition-all hover:-translate-y-0.5">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                     </button>
                 </>
             ) : recordingType === 'video' && (
-                <button onClick={stopRecording} className="p-2 px-4 rounded-lg bg-red-900/50 text-red-200 border border-red-500 animate-pulse text-xs font-bold">
-                    STOP
+                <button onClick={stopRecording} className="p-3 px-6 rounded-xl bg-red-900/20 text-red-500 border border-red-500/50 animate-pulse text-xs font-bold tracking-widest uppercase">
+                    Stop Rec
                 </button>
             )}
 
             <input 
                 type="text" 
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:border-cyan-500 focus:outline-none placeholder-slate-600 font-sans shadow-inner"
-                placeholder={recordingType ? "Recording..." : "Ask your co-founder..."}
+                className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 focus:outline-none placeholder-slate-600 transition-all"
+                placeholder={recordingType ? "Recording..." : "Type your update..."}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyPress}
                 disabled={isLoading || !!recordingType}
             />
-            <Button onClick={handleSend} disabled={isLoading || (!inputValue.trim() && !mediaBlob)} className="px-5 py-2">
-                <svg className="w-5 h-5 transform rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+            <Button onClick={handleSend} disabled={isLoading || (!inputValue.trim() && !mediaBlob)} className="px-5 py-3 rounded-xl">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
             </Button>
         </div>
       </div>

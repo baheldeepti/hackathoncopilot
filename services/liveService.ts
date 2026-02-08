@@ -13,12 +13,21 @@ export class LiveSessionManager {
     private nextStartTime: number = 0;
     private isConnected: boolean = false;
     private videoInterval: number | null = null;
+    private isScreenSharing: boolean = false;
 
     constructor() {}
 
+    setScreenShareMode(enabled: boolean) {
+        this.isScreenSharing = enabled;
+    }
+
     async connect(config: HackathonConfig, onAudioData: (isPlaying: boolean) => void, onError: (err: string) => void) {
         try {
-            this.client = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            // @ts-ignore
+            const apiKey = import.meta.env?.VITE_GEMINI_API_KEY || process.env.API_KEY;
+            if (!apiKey) throw new Error("API Key not found");
+
+            this.client = new GoogleGenAI({ apiKey });
 
             // 1. Audio Contexts
             this.inputContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -28,16 +37,27 @@ export class LiveSessionManager {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             
             // 3. Connect to Gemini Live
+            // Use the voice selected by the organizer, fallback to Fenrir if not set
+            const selectedVoice = config.founderVoice || 'Fenrir';
+
             const sessionPromise = this.client.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-12-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } },
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } },
                     },
                     systemInstruction: `You are the Founder & Mentor for ${config.name}. 
                     Vision: ${config.vision}. 
-                    You are in a live video call with a participant. Be brief, encouraging, and helpful.`,
+                    
+                    MODE: Live Video Call.
+                    
+                    CRITICAL PROTOCOL FOR DEBUGGING:
+                    1. If the user mentions a bug, error, or shows confusion, YOU MUST ASK: "Please click the 'Share Screen' button so I can see the code."
+                    2. When the video feed changes to a screen share (you will see code editors, terminals, or dense text), YOU MUST ACKNOWLEDGE IT: "Okay, I see your screen now. Let me read that error."
+                    3. Read the text on the screen to diagnose.
+                    
+                    Be brief, encouraging, and helpful.`,
                 },
                 callbacks: {
                     onopen: async () => {
@@ -100,16 +120,22 @@ export class LiveSessionManager {
         
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        const interval = 1000 / 2; // 2 FPS to save bandwidth/quota
+        const interval = 1000 / 2; // 2 FPS to save bandwidth/quota by default
 
         this.videoInterval = window.setInterval(async () => {
             if (!this.isConnected || !ctx) return;
             
-            canvas.width = videoElement.videoWidth / 4; // Downscale
-            canvas.height = videoElement.videoHeight / 4;
+            // Dynamic scaling: If sharing screen, scale less (0.5) to keep text readable. 
+            // If webcam (face), scale more (0.25) to save bandwidth.
+            const scale = this.isScreenSharing ? 0.5 : 0.25;
+
+            canvas.width = videoElement.videoWidth * scale;
+            canvas.height = videoElement.videoHeight * scale;
             ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
             
-            const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+            // Use higher quality for screen share
+            const quality = this.isScreenSharing ? 0.7 : 0.5;
+            const base64 = canvas.toDataURL('image/jpeg', quality).split(',')[1];
             
             this.session.sendRealtimeInput({
                 media: {

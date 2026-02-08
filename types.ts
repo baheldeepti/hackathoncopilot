@@ -12,9 +12,7 @@ export interface HackathonConfig {
   avatarFile: File | null;
   youtubeLinks: string[];
   isPublished: boolean;
-  founderVoice: string; // 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'ElevenLabs'
-  elevenLabsKey?: string;
-  elevenLabsVoiceId?: string;
+  founderVoice: string; // 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr'
 }
 
 export interface ChatMessage {
@@ -24,5 +22,4 @@ export interface ChatMessage {
   videoUrl?: string;
   isVideoGenerating?: boolean;
   videoError?: string;
-  isClonedVoice?: boolean;
 }

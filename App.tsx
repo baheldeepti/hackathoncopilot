@@ -36,9 +36,7 @@ RULES:
           'https://www.youtube.com/watch?v=zRw8s71aRbw'  // How to Pitch
       ],
       isPublished: true, // Demo is published by default
-      founderVoice: 'Fenrir',
-      elevenLabsKey: '',
-      elevenLabsVoiceId: ''
+      founderVoice: 'Fenrir'
   };
 
   const emptyConfig: HackathonConfig = {
@@ -61,9 +59,7 @@ RULES:
           ...parsed,
           files: [], // Files cannot be persisted in localStorage
           avatarFile: null,
-          founderVoice: parsed.founderVoice || 'Fenrir',
-          elevenLabsKey: parsed.elevenLabsKey || '',
-          elevenLabsVoiceId: parsed.elevenLabsVoiceId || ''
+          founderVoice: parsed.founderVoice || 'Fenrir'
         };
       }
     } catch(e) {
@@ -208,7 +204,8 @@ RULES:
   };
 
   return (
-    <div className="antialiased text-slate-100 bg-slate-950 min-h-screen font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+    <div className="antialiased text-slate-100 min-h-screen font-sans selection:bg-cyan-500/30 selection:text-cyan-200 relative">
+      {/* App Container */}
       {currentView === AppView.SPLASH && (
         <SplashScreen onSelectRole={handleAuth} />
       )}
